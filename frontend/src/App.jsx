@@ -8,7 +8,6 @@ function App() {
 
   return (
     <>
-      <Navbar />
       <div className="container mx-auto">
         <Homepage />
       </div>

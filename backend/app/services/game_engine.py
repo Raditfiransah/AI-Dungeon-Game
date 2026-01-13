@@ -1,6 +1,7 @@
 import json
+import time
 from openai import OpenAI
-from typing import Dict, Any
+from typing import Dict, Any, List
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -9,146 +10,193 @@ client = OpenAI(
     base_url=settings.OPENAI_BASE_URL
 )
 
-# System Prompt yang KETAT - Tidak Berhalusinasi
-SYSTEM_PROMPT = """### ROLE & OBJECTIVE
-You are the "Game Engine" for a text-based RPG. You are NOT a chat assistant.
-Your goal is to process the User's Action, update the game state, and advance the narrative based on the Current State provided.
+# Strict System Prompt - JSON only, no hallucination
+SYSTEM_PROMPT = """### ROLE
+You are a strict Dungeon Master for a text-based RPG called "AI Dungeon". 
+You are NOT a helpful assistant. You are a narrator who controls the story.
 
-### STRICT OUTPUT FORMAT
-You MUST reply with a VALID JSON object. Do not include markdown formatting (like ```json), do not include intro/outro text. Just the raw JSON string.
+### CRITICAL RULES
+1. Output ONLY valid JSON. No markdown (```), no intro text, no explanations.
+2. You control the STORY only. You do NOT decide final HP values.
+3. Keep narratives SHORT (2-3 sentences max). Be atmospheric and punchy.
+4. Always provide EXACTLY 3 choices in order: [Positive/Safe, Neutral, Negative/Risky]
+5. If player tries impossible things, narrate failure with consequences.
+6. Combat: Be fair. Enemies fight back. Set damage accordingly.
+7. If damage would kill player (hp + damage <= 0), set game_over: true.
 
-Expected JSON Structure:
+### JSON OUTPUT FORMAT
 {{
-  "narrative": "String. Detailed description of what happens (max 3 sentences).",
-  "hp_change": Integer. Negative for damage, Positive for healing, 0 for no change.,
-  "inventory_updates": List of Strings. E.g. ["+Gold Coin", "-Potion"] or []. Use "+" to add, "-" to remove.,
-  "new_location": "String or null. Only change if user moves to a distinct new place.",
-  "choices": ["String", "String", "String"]. Exactly 3 distinct suggested actions for the user.,
-  "game_over": Boolean. True only if HP reaches 0 or a win condition is met.
+  "narrative": "String. What happens (2-3 sentences).",
+  "damage": Integer. Damage to player (positive number or 0),
+  "heal": Integer. Healing for player (positive number or 0),
+  "gain_item": "String or null. Item name if player gains something.",
+  "lose_item": "String or null. Item name if player loses/uses something.",
+  "new_location": "String or null. Only if player moves to new area.",
+  "choices": ["Positive choice", "Neutral choice", "Risky choice"],
+  "game_over": Boolean. True only if player dies or wins.,
+  "exp_gain": Integer. Experience points gained (0-50).,
+  "event_trigger": "String or null. Special event code like BOSS_DEFEATED, QUEST_COMPLETE."
 }}
 
-### GAMEPLAY RULES (MUST FOLLOW)
-1. **Combat & Consequences**: If the user attacks or takes risks, calculate logical outcomes. If the enemy fights back, apply negative "hp_change".
-2. **Consistency**: Check the "Current Inventory". User CANNOT use items they do not have. If they try, narrate a failure and set "hp_change" to 0.
-3. **Pacing**: Keep the "narrative" punchy and atmospheric. Do not write long paragraphs.
-4. **God Mode Forbidden**: If user tries to do impossible things (e.g., "I fly to the moon"), narrate a failure or a funny consequence.
-5. **Death**: If "Current HP" + "hp_change" <= 0, you MUST set "game_over": true and describe the character's death in "narrative".
-
-### CURRENT STATE (CONTEXT)
-- Player HP: {hp}
+### CURRENT STATE
+- Player HP: {hp}/{max_hp}
+- Level: {level} (EXP: {exp})
 - Inventory: {inventory}
-- Current Location: {location}
-- Story Context: {history}
+- Location: {location}
+- Story Summary: {summary}
 """
 
-def process_action(action: str, current_state: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Proses action user dengan LLM dan return hasil dalam format JSON
+
+def build_context(session: Dict[str, Any], messages: List[Dict], action: str) -> List[Dict]:
+    """Build context for AI with sliding window + summary"""
     
-    Args:
-        action: Aksi yang dilakukan user
-        current_state: State game saat ini (hp, inventory, location, history)
-    
-    Returns:
-        Dict berisi narrative, hp_change, inventory_updates, new_location, choices, game_over
-    """
-    
-    # Format system prompt dengan current state
-    formatted_prompt = SYSTEM_PROMPT.format(
-        hp=current_state["hp"],
-        inventory=", ".join(current_state["inventory"]) if current_state["inventory"] else "Empty",
-        location=current_state["location"],
-        history=current_state["history"]
+    # Format system prompt with current state
+    system_content = SYSTEM_PROMPT.format(
+        hp=session["hp"],
+        max_hp=session["max_hp"],
+        level=session["level"],
+        exp=session["exp"],
+        inventory=", ".join(session["inventory"]) if session["inventory"] else "Empty",
+        location=session["location"],
+        summary=session["summary"] or "You just started your adventure."
     )
     
+    # Build conversation history (sliding window - last N messages)
+    conversation = [{"role": "system", "content": system_content}]
+    
+    for msg in messages:
+        conversation.append({
+            "role": msg["role"],
+            "content": msg["content"]
+        })
+    
+    # Add current action
+    conversation.append({"role": "user", "content": action})
+    
+    return conversation
+
+
+def process_action(action: str, session: Dict[str, Any], 
+                   recent_messages: List[Dict]) -> Dict[str, Any]:
+    """Process player action with LLM and return structured result"""
+    
+    # Build context with sliding window
+    messages = build_context(session, recent_messages, action)
+    
+    start_time = time.time()
+    
     try:
-        # Panggil OpenAI API
         response = client.chat.completions.create(
             model=settings.OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": formatted_prompt},
-                {"role": "user", "content": action}
-            ],
+            messages=messages,
             temperature=settings.TEMPERATURE,
             max_tokens=settings.MAX_TOKENS,
-            response_format={"type": "json_object"}  # Force JSON output
+            response_format={"type": "json_object"}
         )
+        
+        latency_ms = int((time.time() - start_time) * 1000)
+        tokens_used = response.usage.total_tokens if response.usage else None
         
         # Parse response
         llm_output = response.choices[0].message.content
         result = json.loads(llm_output)
         
-        # Validasi struktur response
-        required_keys = ["narrative", "hp_change", "inventory_updates", "new_location", "choices", "game_over"]
-        for key in required_keys:
-            if key not in result:
-                raise ValueError(f"Missing required key: {key}")
+        # Validate and set defaults
+        result.setdefault("narrative", "Something mysterious happens...")
+        result.setdefault("damage", 0)
+        result.setdefault("heal", 0)
+        result.setdefault("gain_item", None)
+        result.setdefault("lose_item", None)
+        result.setdefault("new_location", None)
+        result.setdefault("game_over", False)
+        result.setdefault("exp_gain", 0)
+        result.setdefault("event_trigger", None)
         
-        # Validasi tipe data
-        if not isinstance(result["hp_change"], int):
-            result["hp_change"] = int(result["hp_change"])
+        # Ensure choices is valid
+        if not isinstance(result.get("choices"), list) or len(result.get("choices", [])) != 3:
+            result["choices"] = ["Continue exploring", "Look around", "Rest"]
         
-        if not isinstance(result["inventory_updates"], list):
-            result["inventory_updates"] = []
-            
-        if not isinstance(result["choices"], list) or len(result["choices"]) != 3:
-            result["choices"] = ["Continue exploring", "Check inventory", "Rest"]
-        
-        if not isinstance(result["game_over"], bool):
-            result["game_over"] = False
+        # Add metadata
+        result["latency_ms"] = latency_ms
+        result["tokens_used"] = tokens_used
+        result["model_name"] = settings.OPENAI_MODEL
         
         return result
         
     except Exception as e:
-        # Fallback jika LLM error
         print(f"Error calling LLM: {e}")
         return {
-            "narrative": "Something went wrong. The world seems to glitch for a moment...",
-            "hp_change": 0,
-            "inventory_updates": [],
+            "narrative": "The world flickers... Something went wrong.",
+            "damage": 0,
+            "heal": 0,
+            "gain_item": None,
+            "lose_item": None,
             "new_location": None,
             "choices": ["Try again", "Look around", "Wait"],
-            "game_over": False
+            "game_over": False,
+            "exp_gain": 0,
+            "event_trigger": None,
+            "latency_ms": 0,
+            "tokens_used": 0,
+            "model_name": settings.OPENAI_MODEL
         }
 
-def apply_inventory_updates(current_inventory: list, updates: list) -> list:
-    """
-    Terapkan update inventory berdasarkan format +Item atau -Item
+
+def generate_summary(messages: List[Dict]) -> str:
+    """Generate a summary of old messages for long-term memory"""
     
-    Args:
-        current_inventory: List inventory saat ini
-        updates: List update dalam format ["+Item", "-Item"]
+    summary_prompt = """Summarize this RPG conversation history in 2-3 sentences. 
+    Focus on: key events, items found, enemies defeated, current quest progress.
+    Be concise. Output plain text only, no JSON."""
     
-    Returns:
-        List inventory yang sudah diupdate
-    """
-    new_inventory = current_inventory.copy()
+    conversation = [
+        {"role": "system", "content": summary_prompt},
+        {"role": "user", "content": "\n".join([f"{m['role']}: {m['content']}" for m in messages])}
+    ]
     
-    for update in updates:
-        if not update:
-            continue
-            
-        operation = update[0]
-        item = update[1:].strip()
-        
-        if operation == "+":
-            new_inventory.append(item)
-        elif operation == "-":
-            if item in new_inventory:
-                new_inventory.remove(item)
+    try:
+        response = client.chat.completions.create(
+            model=settings.OPENAI_MODEL,
+            messages=conversation,
+            temperature=0.3,
+            max_tokens=150
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"Error generating summary: {e}")
+        return "The adventure continues..."
+
+
+def calculate_new_hp(current_hp: int, max_hp: int, damage: int, heal: int) -> int:
+    """Calculate new HP with clamping"""
+    new_hp = current_hp - damage + heal
+    return max(0, min(max_hp, new_hp))
+
+
+def apply_inventory_changes(inventory: List[str], gain: str = None, lose: str = None) -> List[str]:
+    """Apply inventory changes"""
+    new_inventory = inventory.copy()
+    
+    if gain:
+        new_inventory.append(gain)
+    
+    if lose and lose in new_inventory:
+        new_inventory.remove(lose)
     
     return new_inventory
 
-def calculate_new_hp(current_hp: int, hp_change: int) -> int:
-    """
-    Hitung HP baru dengan batas minimum 0
+
+def calculate_level_up(current_level: int, current_exp: int, exp_gain: int) -> tuple:
+    """Calculate level progression. Returns (new_level, new_exp)"""
+    new_exp = current_exp + exp_gain
+    new_level = current_level
     
-    Args:
-        current_hp: HP saat ini
-        hp_change: Perubahan HP (bisa negatif atau positif)
+    # Simple leveling: 100 exp per level
+    exp_for_next = current_level * 100
     
-    Returns:
-        HP baru (minimum 0)
-    """
-    new_hp = current_hp + hp_change
-    return max(0, new_hp)  # HP tidak boleh negatif
+    while new_exp >= exp_for_next:
+        new_exp -= exp_for_next
+        new_level += 1
+        exp_for_next = new_level * 100
+    
+    return new_level, new_exp
