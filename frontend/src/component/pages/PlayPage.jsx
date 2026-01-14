@@ -1,37 +1,41 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 
-// Narrative Typing Effect Component
+// Sentence-by-sentence reveal effect
 const DramaticText = ({ text, onComplete }) => {
-    const [displayedText, setDisplayedText] = useState('');
-    const indexRef = useRef(0);
+    const [visibleSentences, setVisibleSentences] = useState(0);
+    // Split by sentence endings (. ! ?) while keeping the punctuation
+    const sentences = text.split(/(?<=[.!?])\s+/).filter(s => s.trim());
 
     useEffect(() => {
-        setDisplayedText('');
-        indexRef.current = 0;
-
-        const speed = 20; // Faster typing speed (20ms per char)
+        setVisibleSentences(0);
 
         const timer = setInterval(() => {
-            if (indexRef.current < text.length) {
-                setDisplayedText((prev) => prev + text.charAt(indexRef.current));
-                indexRef.current++;
-            } else {
-                clearInterval(timer);
-                onComplete?.();
-            }
-        }, speed);
+            setVisibleSentences(prev => {
+                if (prev >= sentences.length) {
+                    clearInterval(timer);
+                    onComplete?.();
+                    return prev;
+                }
+                return prev + 1;
+            });
+        }, 300); // 600ms delay between each sentence
 
         return () => clearInterval(timer);
-    }, [text]);
+    }, [text, sentences.length]);
 
     return (
-        <div className="relative">
-            <p className="text-lg leading-relaxed whitespace-pre-line text-gray-200" style={{ fontFamily: 'var(--font-body)' }}>
-                {displayedText}
-                <span className="inline-block w-2 h-5 ml-1 align-middle bg-[#facc15] animate-pulse" />
-            </p>
-        </div>
+        <p className="text-lg leading-relaxed whitespace-pre-line text-gray-200">
+            {sentences.map((sentence, index) => (
+                <span
+                    key={index}
+                    className={`transition-opacity duration-500 ${index < visibleSentences ? 'opacity-100' : 'opacity-0'
+                        }`}
+                >
+                    {sentence}{' '}
+                </span>
+            ))}
+        </p>
     );
 };
 
@@ -370,7 +374,7 @@ const PlayPage = () => {
                             disabled={loading}
                             className="px-5 py-2.5 bg-transparent border border-gray-700 rounded-full text-gray-400 text-sm font-medium hover:bg-white/5 transition-all disabled:opacity-50"
                         >
-                            ↺ RETRY
+                            ↺ Redo
                         </button>
                     </div>
                 </div>
