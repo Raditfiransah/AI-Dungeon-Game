@@ -12,6 +12,24 @@ const PlayPage = () => {
     const [showTurnPanel, setShowTurnPanel] = useState(false);
     const messagesEndRef = useRef(null);
     const inputRef = useRef(null);
+    const inventoryRef = useRef(null);
+
+    // Outside click handler for inventory
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (inventoryRef.current && !inventoryRef.current.contains(event.target)) {
+                setShowInventory(false);
+            }
+        };
+
+        if (showInventory) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [showInventory]);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -178,23 +196,27 @@ const PlayPage = () => {
                     backgroundImage: 'linear-gradient(to bottom, rgba(10, 15, 26, 0.3), rgba(10, 15, 26, 0.9)), url("https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=1920")',
                     backgroundSize: 'cover',
                     backgroundPosition: 'center'
-                }}
-            />
+                }} />
 
             {/* Top Bar */}
             <div className="fixed top-0 left-0 right-0 z-50 flex justify-between items-center px-6 py-4 bg-transparent">
                 {/* Left Side - Logo & Inventory */}
                 <div className="flex items-center gap-4">
                     <Link to="/" className="flex items-center gap-2 text-gray-300 hover:text-white transition-colors">
-                        <span className="text-xl">🔥</span>
-                        <span className="font-medium text-lg" style={{ fontFamily: 'var(--font-display)' }}>Deioter's</span>
+                        <span className="text-xl">⚔</span>
+                        <span className="font-medium text-lg" style={{ fontFamily: 'var(--font-display)' }}>USERNAME</span>
                     </Link>
 
+
+                </div>
+
+                {/* Right Side - Stats & Controls */}
+                <div className="flex items-center gap-4">
                     {/* Inventory Button - Top Left */}
-                    <div className="relative">
+                    <div className="relative" ref={inventoryRef}>
                         <button
                             onClick={() => setShowInventory(!showInventory)}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all ${showInventory
+                            className={`flex items-center gap-2 px-3 py-1 rounded-lg transition-all ${showInventory
                                 ? 'bg-[#facc15]/20 text-[#facc15]'
                                 : 'text-gray-400 hover:text-[#facc15] hover:bg-white/5'
                                 }`}
@@ -205,7 +227,7 @@ const PlayPage = () => {
 
                         {/* Inventory Dropdown */}
                         {showInventory && (
-                            <div className="absolute top-full left-0 mt-2 bg-[#0f172a]/95 backdrop-blur-md rounded-lg border border-[#facc15]/20 p-4 w-64 shadow-xl">
+                            <div className="absolute top-full left-0 mt-2 bg-[#0f172a]/95 backdrop-blur-md rounded-lg border border-[#facc15]/20 p-4 w-48 shadow-xl">
                                 <h3 className="text-[#facc15] text-sm font-semibold mb-3" style={{ fontFamily: 'var(--font-display)' }}>🎒 Inventory</h3>
                                 {stats.inventory?.length > 0 ? (
                                     <ul className="space-y-2">
@@ -219,10 +241,6 @@ const PlayPage = () => {
                             </div>
                         )}
                     </div>
-                </div>
-
-                {/* Right Side - Stats & Controls */}
-                <div className="flex items-center gap-4">
                     <div className="flex items-center gap-3 text-sm text-gray-400">
                         <span className="flex items-center gap-1">
                             <span className="text-red-400">❤</span>
@@ -232,12 +250,6 @@ const PlayPage = () => {
                         </span>
                         <span>Lv.<span className="text-[#facc15]">{stats.level}</span></span>
                     </div>
-                    <button onClick={handleUndo} className="p-2 text-gray-500 hover:text-white transition-colors" title="Undo">
-                        ↺
-                    </button>
-                    <button onClick={() => window.location.reload()} className="p-2 text-gray-500 hover:text-white transition-colors" title="Refresh">
-                        ⟳
-                    </button>
                     <button onClick={resetGame} className="p-2 text-gray-500 hover:text-red-400 transition-colors" title="Reset Game">
                         ⚙
                     </button>
@@ -349,13 +361,6 @@ const PlayPage = () => {
                             className="flex items-center gap-2 px-4 py-2 text-gray-500 text-sm hover:text-gray-300 transition-all disabled:opacity-50"
                         >
                             <span>↺</span> RETRY
-                        </button>
-                        <button
-                            onClick={resetGame}
-                            disabled={loading}
-                            className="flex items-center gap-2 px-4 py-2 text-gray-500 text-sm hover:text-red-400 transition-all disabled:opacity-50"
-                        >
-                            <span>🗑</span> ERASE
                         </button>
                     </div>
                 </div>
