@@ -25,7 +25,8 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup_event():
-    database.init_db()
+    # Tables are created by init.sql, just test connection
+    database.test_connection()
 
 
 @app.get("/")
